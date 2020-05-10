@@ -1,0 +1,207 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library("tidyverse")
+library("tidymodels")
+library("plotly")
+library("skimr")
+library("caret")
+library("cowplot")
+```
+
+```{r, include=FALSE}
+train <- read_csv("airbnbTrain.csv")
+```
+
+```{r}
+train <- train %>% mutate(new = as.integer(`{randomControl}`/1000)) %>% filter(new == 107)
+```
+
+```{r}
+col_in_train <- c("id", "amenities","bathrooms", "bedrooms", "accommodates", "cancellation_policy", "cleaning_fee", "extra_people", "host_is_superhost","host_listings_count", "price", "review_scores_rating", "high_booking_rate", "host_response_rate","host_response_time", "minimum_nights", "security_deposit", "property_type", "latitude","longitude")
+```
+
+```{r}
+dc_data <- train[col_in_train]
+```
+
+```{r}
+dc_data <- dc_data %>% mutate(amenities = tolower(amenities))
+```
+
+```{r}
+must_have_amenities <- c("parking")
+dc_data <- dc_data %>% bind_cols(as.data.frame(sapply(must_have_amenities, grepl, dc_data$amenities)))
+```
+
+```{r}
+recode_policy <- as.list(dc_data %>% group_by(cancellation_policy) %>% tally() %>% mutate(pct = n/sum(n)*100) %>% filter(pct < 10))[1]
+```
+
+```{r}
+apartment <- c('Apartment', 'Aparthotel', 'Boutique hotel', 'Condominium', 'Hotel', 'Loft', 'Serviced apartment', 'Guest suite')
+
+house <- c('Bungalow', 'Villa', 'Castle', 'Cabin', 'Hut', 'Cottage', 'Barn', 'Tiny house', 'Bed and breakfast', 'Casa particular (Cuba)', 'Townhouse', 'Earth house', 'Chalet', 'Dome house', 'Guesthouse', 'House', 'In-law', 'Nature lodge', 'Resort', 'Vacation home')
+```
+
+```{r}
+dc_data <- dc_data %>% mutate(high_booking_rate = as_factor(high_booking_rate),
+                                  no_of_amenities = sapply(strsplit(amenities, ","), length),
+                                  cancellation_policy = if_else(cancellation_policy %in% unlist(recode_policy),"Other",cancellation_policy),
+                                  cancellation_policy = as_factor(cancellation_policy),
+                                  property_type = if_else(property_type %in% apartment,"apartment", if_else(property_type %in% house,"house","other")),
+                                  property_type = as_factor(property_type),
+                                  cleaning_fee = as.numeric(gsub('\\$|,', '', cleaning_fee)),
+                                  cleaning_fee = if_else(is.na(cleaning_fee),0,cleaning_fee),
+                                  extra_people = as.numeric(gsub('\\$|,', '', extra_people)),
+                                  price = as.numeric(gsub('\\$|,', '', price)),
+                                  derived_review = if_else(review_scores_rating >= 90, "Good",if_else(review_scores_rating >0 & review_scores_rating < 90, "Okay", "Poor")),
+                                  derived_review = if_else(is.na(derived_review),"Poor",derived_review),
+                                  derived_review = as_factor(derived_review),
+                                  host_response_rate = as.numeric(gsub('\\%|,', '', host_response_rate)),
+                                  host_response_rate = if_else(host_response_rate > 90, "Good","Bad"),
+                                  host_response_rate = if_else(is.na(host_response_rate),"Bad",host_response_rate),
+                                  host_response_rate = as_factor(host_response_rate),
+                                  host_response_time = if_else(host_response_time %in% c("within an hour", "within a few hours","within a day"),"Good", "Bad"),
+                                  host_response_time = as_factor(host_response_time),
+                                  minimum_nights = if_else(minimum_nights <= 2, "Good", "Bad"),
+                                  minimum_nights = as_factor(minimum_nights),
+                                  security_deposit = as.numeric(gsub('\\$|,', '', security_deposit)),
+                                  security_deposit = if_else(is.na(security_deposit),0,security_deposit),
+                                  host_is_superhost = if_else(is.na(host_is_superhost),FALSE,host_is_superhost),
+                                  bedrooms = if_else(is.na(bedrooms),mean(bedrooms, na.rm = TRUE),bedrooms),
+                                  bathrooms = if_else(is.na(bathrooms),mean(bathrooms, na.rm = TRUE),bathrooms),
+                                  host_listings_count = if_else(is.na(host_listings_count),mean(host_listings_count, na.rm = TRUE),host_listings_count))
+```
+
+```{r}
+remove_var <- c("amenities","review_scores_rating")
+dc_data <- dc_data[!names(dc_data) %in% remove_var]
+```
+
+```{r, include=FALSE}
+skim(dc_data)
+```
+
+```{r}
+dc_data %>% filter(price <= 1000) %>% ggplot(aes(y = price, x = high_booking_rate, fill = high_booking_rate)) + geom_boxplot() + xlab("High Booking Rate") + ylab("Rental Price") + ggtitle("Rental Price Distribution")+scale_fill_manual(values=c( "#d10000","#00d126")) + theme_minimal()
+```
+
+```{r}
+dc_data %>% ggplot(aes(y = no_of_amenities, x = high_booking_rate, fill = high_booking_rate)) + geom_boxplot() + xlab("High Booking Rate") + ylab("No of Amenitites") +theme_minimal() + scale_fill_manual(values=c( "#d10000","#00d126")) + ggtitle("Amenities Distribution")
+```
+
+```{r, include=FALSE}
+ggplot(dc_data, aes(fill=high_booking_rate, y=frequency(bedrooms), x=bedrooms)) + geom_bar(position="stack", stat="identity") + xlab("Count of Airbnb") + ylab("Bedrooms") + ggtitle("Count of Airbnb Rental according to bedroom distribution") +theme_classic() + xlim(0,5) + scale_fill_manual(values=c( "#d10000","#00d126"))
+```
+
+```{r, include=FALSE}
+ggplot(dc_data, aes(fill=high_booking_rate, y=frequency(bathrooms), x=bathrooms)) + geom_bar(position="stack", stat="identity", width = 0.4) + xlab("Count of Airbnb") + ylab("Bathrooms") + ggtitle("Count of Airbnb Rental according to bathroom distribution") +theme_classic() + xlim(0, 5)
+```
+
+```{r}
+ggplot(data.frame(dc_data %>% xtabs(~high_booking_rate+derived_review, .)), aes(fill = high_booking_rate, y = Freq, x = derived_review)) + geom_bar(position = "dodge", stat = "identity", width = 0.4) + xlab("Customer Reviews") + ylab("Count of Airbnb") + ggtitle("Count of Airbnb Rental with Customer Review") + theme_classic() + scale_fill_manual(values=c( "#d10000","#00d126"))
+```
+
+```{r}
+ggplot(data.frame(dc_data %>% xtabs(~high_booking_rate+parking, .)), aes(fill = high_booking_rate, y = Freq, x = parking)) + geom_bar(position = "dodge", stat = "identity", width = 0.4) + xlab("Parking") + ylab("Count of Airbnb") + ggtitle("Count of Airbnb Rental with Parking Availability") + theme_classic() + scale_fill_manual(values=c( "#d10000","#00d126"))
+```
+
+```{r}
+dc_data %>% select(property_type, bedrooms,bathrooms, high_booking_rate) %>% group_by(property_type, bedrooms, bathrooms, high_booking_rate) %>% tally() %>% spread(high_booking_rate,n) %>% rename("Low_Booking_Rate" = "0", "High_Booking_Rate" = "1") %>% mutate(Percentage = High_Booking_Rate/(Low_Booking_Rate+High_Booking_Rate)*100) %>% arrange(desc(property_type,Percentage)) %>% filter(Low_Booking_Rate+High_Booking_Rate >= 100)
+```
+
+----------------------------------------------------------------------------------------------------
+```{r}
+set.seed(333)
+dc_train <- sample_frac(dc_data,0.8)
+dc_test <- dplyr::setdiff(dc_data, dc_train)
+```
+
+```{r}
+dc_logistic <- glm(high_booking_rate ~ . -id -accommodates -latitude - longitude, family = binomial(), data = dc_train)
+``` 
+
+```{r}
+summary(dc_logistic)
+```
+
+```{r, include=FALSE}
+car::vif(dc_logistic)
+```
+
+```{r}
+predict_dc_logistic <- predict(dc_logistic, dc_test, type = "response") %>% 
+  bind_cols(dc_test, predictionProb = .) %>% 
+  mutate(predictedClass = if_else(predictionProb >= 0.5,1,0))
+```
+
+```{r}
+predict_dc_logistic %>% xtabs(~predictedClass+high_booking_rate, .) %>% 
+  confusionMatrix(positive = '1')
+```
+
+```{r}
+set.seed(2020)
+
+dc_xgboost <- train(high_booking_rate ~ . -id -bedrooms -latitude - longitude, data=dc_train, method='xgbTree', trControl=trainControl(method='cv', number=10))
+```
+
+```{r}
+plot(varImp(dc_xgboost), top=20)
+```
+
+```{r}
+predict_dc_xgboost <-
+  dc_xgboost %>% 
+  predict(dc_test, type='prob') %>% 
+  bind_cols(dc_test, predictedProb=.$"1") %>% 
+  mutate(predictedClass = if_else(predictedProb >= 0.5,1,0))
+```
+
+```{r}
+predict_dc_xgboost %>% xtabs(~predictedClass+high_booking_rate, .) %>% 
+  confusionMatrix(positive = '1')
+```
+
+```{r, include=FALSE}
+library(AUC)
+```
+
+```{r}
+logistic <- predict(dc_logistic,dc_test, type='response') %>% 
+  bind_cols(dc_test,PredictedProb= .) %>% 
+  mutate(model = "Logistic") 
+
+xgb <- predict(dc_xgboost,dc_test, type='prob') %>% 
+  bind_cols(dc_test,PredictedProb= .$"1") %>% 
+  mutate(model = "XGB") 
+
+modelAll <- bind_rows(logistic, xgb)
+
+modelAll %>%
+  group_by(model) %>% 
+  roc_curve(truth = high_booking_rate, PredictedProb) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_line(size = 1.1) +
+  geom_abline(slope = 1, intercept = 0, size = 0.4) +
+  coord_fixed() +
+  theme_cowplot()
+```
+
+```{r}
+modelAll %>%
+  group_by(model) %>%
+  roc_auc(truth = high_booking_rate, PredictedProb) %>% 
+  arrange(desc(.estimate))
+```
+
